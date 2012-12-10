@@ -13,7 +13,7 @@ module Guard
     module Server
       class << self
 
-        attr_accessor :process
+        attr_accessor :process, :pid
 
         # Start the internal test server for getting the Jasmine runner.
         #
@@ -38,6 +38,8 @@ module Guard
             start_unicorn_server(port, options)
           when :jasmine_gem
             start_rake_server(port, 'jasmine')
+          when :zeus
+            start_zeus_server(port, options)
           else
             start_rake_server(port, server.to_s) unless server == :none
           end
@@ -51,6 +53,18 @@ module Guard
           if self.process
             ::Guard::UI.info 'Guard::Jasmine stops server.'
             self.process.stop(5)
+          end
+          if self.pid
+            ::Guard::UI.info 'Guard::Jasmine stops zeus server.'
+            begin
+              Timeout.timeout(5) do
+                Process.kill "INT", pid
+                Process.wait pid
+              end
+            rescue Timeout::Error
+              ::Guard::UI.info 'kill 9'
+              Process.kill 9, pid
+            end
           end
         end
 
@@ -101,6 +115,44 @@ module Guard
         rescue => e
           ::Guard::UI.error "Cannot start Unicorn server: #{ e.message }"
         end
+
+        # Start the Rack server of the current project via Zeus
+        #
+        # @param [Hash] options the server options
+        # @option options [String] server_env the Rails environment
+        # @option options [Number] port the server port
+        #
+        def start_zeus_server(port, options)
+          zeus_command   = options[:zeus_command] || "server"
+
+          ::Guard::UI.info "Guard::Jasmine starts Zeus #{zeus_command} on port #{ port }."
+
+          self.pid = spawn ['zeus', zeus_command, '-p', port.to_s].join(' ')
+        rescue => e
+          ::Guard::UI.error "Cannot start Zeus server: #{ e.message }"
+        end
+
+        # Start the Rack server of the current project. This
+        # will simply start a server that uses the `config.ru`
+        # in the current directory.
+        #
+        # @param [Hash] options the server options
+        # @option options [String] server_env the Rails environment
+        # @option options [Number] port the server port
+        #
+        def start_unicorn_server(port, options)
+          environment   = options[:server_env]
+
+          ::Guard::UI.info "Guard::Jasmine starts Unicorn test server on port #{ port } in #{ environment } environment."
+
+          self.process = ChildProcess.build('unicorn_rails', '-E', environment.to_s, '-p', port.to_s)
+          self.process.io.inherit! if ::Guard.respond_to?(:options) && ::Guard.options && ::Guard.options[:verbose]
+          self.process.start
+
+        rescue => e
+          ::Guard::UI.error "Cannot start Unicorn server: #{ e.message }"
+        end
+
 
         # Start the Jasmine gem server of the current project.
         #
